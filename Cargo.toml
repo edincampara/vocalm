@@ -1,0 +1,53 @@
+[package]
+name = "vocalm"
+version = "0.1.0"
+edition = "2021"
+description = "Vocalm — free on-device AI noise cancellation and meeting recorder"
+license = "MIT"
+
+[[bin]]
+name = "vocalm"
+path = "src/main.rs"
+
+[[bin]]
+name = "denoise-wav"
+path = "src/bin/denoise_wav.rs"
+
+[dependencies]
+cpal = "0.15"
+ringbuf = "0.4"
+eframe = "0.31"
+egui = "0.31"
+ndarray = "0.15"
+nnnoiseless = { version = "0.5", default-features = false }
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", tag = "v0.5.6", default-features = false, features = [
+    "tract",
+    "default-model",
+] }
+rubato = "0.15"
+hound = "3.5"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+chrono = "0.4"
+rfd = "0.15"
+open = "5"
+ureq = "2"
+
+# Whisper: Metal acceleration on macOS, plain CPU elsewhere (Windows/Linux)
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.14", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# DSP must be fast even in debug builds, or audio underruns constantly
+[profile.dev.package."*"]
+opt-level = 2

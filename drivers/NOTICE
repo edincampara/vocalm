@@ -1,0 +1,14 @@
+The Vocalm virtual audio drivers (VocalmMic.driver, VocalmSpeaker.driver) are
+rebranded builds of BlackHole by Existential Audio Inc.
+    https://github.com/ExistentialAudio/BlackHole
+BlackHole is licensed under GPL-3.0. The driver components therefore remain
+GPL-3.0; their complete corresponding source is the BlackHole source plus the
+rename patches applied in build_drivers.sh (this repository).
+
+The Vocalm application itself is a separate program that communicates with the
+drivers only through the standard CoreAudio APIs.
+
+Note for future commercial distribution: either keep publishing the driver
+patches under GPL-3.0 (as here), license BlackHole commercially from
+Existential Audio, or replace with a clean-room driver derived from Apple's
+BSD-licensed AudioServerPlugIn sample code.
