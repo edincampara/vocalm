@@ -72,7 +72,7 @@ pub fn u32_to_kind(v: u32) -> EngineKind {
 /// Keeps the streams and worker alive; dropping it stops everything.
 pub struct Pipeline {
     _input_stream: cpal::Stream,
-    _output_stream: cpal::Stream,
+    _output_stream: Option<cpal::Stream>,
     worker: Option<std::thread::JoinHandle<()>>,
     shared: Arc<Shared>,
     pub input_name: String,
@@ -114,20 +114,43 @@ fn find_device(host: &cpal::Host, name: &str, input: bool) -> Result<cpal::Devic
             return Ok(d);
         }
     }
+    // Windows: an *output* device can be captured directly (WASAPI loopback) —
+    // no virtual cable or admin rights needed. cpal treats an output device
+    // passed to build_input_stream as a loopback capture.
+    if input && cfg!(target_os = "windows") {
+        for d in host.output_devices()? {
+            if d.name().map(|n| n == name).unwrap_or(false) {
+                return Ok(d);
+            }
+        }
+    }
     Err(anyhow!("device not found: {name}"))
 }
 
-pub fn start(input_name: &str, output_name: &str, shared: Arc<Shared>) -> Result<Pipeline> {
+/// Start a processing pipeline. `output_name: None` runs capture-only — audio is
+/// still denoised, metered and available to the recorder, but not played anywhere
+/// (used on machines without a virtual cable, e.g. no-admin Windows laptops).
+pub fn start(input_name: &str, output_name: Option<&str>, shared: Arc<Shared>) -> Result<Pipeline> {
     let host = cpal::default_host();
     let input_dev = find_device(&host, input_name, true).context("input device")?;
-    let output_dev = find_device(&host, output_name, false).context("output device")?;
+    let output_dev = output_name
+        .map(|n| find_device(&host, n, false).context("output device"))
+        .transpose()?;
 
-    let in_cfg = input_dev.default_input_config().context("input config")?;
-    let out_cfg = output_dev.default_output_config().context("output config")?;
+    // Loopback sources (Windows output devices) have no input config — use
+    // their output config for capture.
+    let in_cfg = input_dev
+        .default_input_config()
+        .or_else(|_| input_dev.default_output_config())
+        .context("input config")?;
+    let out_cfg = output_dev
+        .as_ref()
+        .map(|d| d.default_output_config().context("output config"))
+        .transpose()?;
     let in_rate = in_cfg.sample_rate().0;
-    let out_rate = out_cfg.sample_rate().0;
+    let out_rate = out_cfg.as_ref().map(|c| c.sample_rate().0).unwrap_or(48_000);
     let in_ch = in_cfg.channels() as usize;
-    let out_ch = out_cfg.channels() as usize;
+    let out_ch = out_cfg.as_ref().map(|c| c.channels() as usize).unwrap_or(1);
 
     // ~500 ms capacity: plenty of headroom without unbounded growth
     let (mut mic_prod, mic_cons) = HeapRb::<f32>::new(in_rate as usize / 2).split();
@@ -171,11 +194,11 @@ pub fn start(input_name: &str, output_name: &str, shared: Arc<Shared>) -> Result
         }
     };
 
-    // --- Output stream: pop mono at device rate, fan out to all channels ---
-    let output_stream = {
+    // --- Output stream (absent in capture-only mode): pop mono, fan out ---
+    let output_stream = if let (Some(output_dev), Some(out_cfg)) = (&output_dev, &out_cfg) {
         let cfg: cpal::StreamConfig = out_cfg.clone().into();
         let shared = shared.clone();
-        match out_cfg.sample_format() {
+        Some(match out_cfg.sample_format() {
             cpal::SampleFormat::F32 => output_dev.build_output_stream(
                 &cfg,
                 move |data: &mut [f32], _| {
@@ -210,7 +233,9 @@ pub fn start(input_name: &str, output_name: &str, shared: Arc<Shared>) -> Result
                 None,
             )?,
             other => return Err(anyhow!("unsupported output sample format {other:?}")),
-        }
+        })
+    } else {
+        None
     };
 
     // --- DSP worker ---
@@ -226,7 +251,9 @@ pub fn start(input_name: &str, output_name: &str, shared: Arc<Shared>) -> Result
     };
 
     input_stream.play()?;
-    output_stream.play()?;
+    if let Some(out) = &output_stream {
+        out.play()?;
+    }
 
     Ok(Pipeline {
         _input_stream: input_stream,
@@ -234,7 +261,7 @@ pub fn start(input_name: &str, output_name: &str, shared: Arc<Shared>) -> Result
         worker: Some(worker),
         shared,
         input_name: input_name.to_string(),
-        output_name: output_name.to_string(),
+        output_name: output_name.unwrap_or("record-only").to_string(),
         input_rate: in_rate,
         output_rate: out_rate,
     })

@@ -266,7 +266,7 @@ impl App {
         let mut app = Self {
             engine_kind: u32_to_kind(cfg.engine_kind),
             atten_db: cfg.atten_db,
-            spk_on: cfg.spk_enabled && spk_cable.is_some(),
+            spk_on: cfg.spk_enabled && (spk_cable.is_some() || cfg!(target_os = "windows")),
             master_on: true,
             tab: Tab::Home,
             inputs,
@@ -311,9 +311,11 @@ impl App {
         self.mic.stop();
         self.spk.stop();
         if self.master_on {
-            if let (Some(inp), Some(outp)) = (self.mic_in.clone(), self.mic_cable.clone()) {
+            // Mic path. Without a virtual cable, still run capture-only so the
+            // orb, meters and recorder work (no-admin machines).
+            if let Some(inp) = self.mic_in.clone() {
                 let shared = Shared::new(self.engine_kind, self.atten_db);
-                match pipeline::start(&inp, &outp, shared.clone()) {
+                match pipeline::start(&inp, self.mic_cable.as_deref(), shared.clone()) {
                     Ok(p) => {
                         self.mic.pipeline = Some(p);
                         self.mic.shared = Some(shared);
@@ -322,10 +324,20 @@ impl App {
                     Err(e) => self.mic.error = Some(format!("{e:#}")),
                 }
             }
+            // Incoming path. With a cable: capture cable → play on real output.
+            // On Windows without a cable: capture the real output directly
+            // (WASAPI loopback), record-only — no driver, no admin.
             if self.spk_on {
-                if let (Some(inp), Some(outp)) = (self.spk_cable.clone(), self.spk_out.clone()) {
+                let route = match (&self.spk_cable, &self.spk_out) {
+                    (Some(cable), Some(out)) => Some((cable.clone(), Some(out.clone()))),
+                    (None, Some(out)) if cfg!(target_os = "windows") => {
+                        Some((out.clone(), None))
+                    }
+                    _ => None,
+                };
+                if let Some((inp, outp)) = route {
                     let shared = Shared::new(self.engine_kind, self.atten_db);
-                    match pipeline::start(&inp, &outp, shared.clone()) {
+                    match pipeline::start(&inp, outp.as_deref(), shared.clone()) {
                         Ok(p) => {
                             self.spk.pipeline = Some(p);
                             self.spk.shared = Some(shared);
@@ -644,11 +656,12 @@ impl App {
                         );
                     });
                 }
-                (None, _) => {
+                (None, true) => {
                     ui.label(
                         RichText::new(
-                            "Virtual device missing — run the Vocalm installer (macOS) or \
-                             install VB-CABLE (Windows), then Rescan in Advanced.",
+                            "Record-only mode: recordings and transcripts work, but meeting \
+                             apps can't hear the cleaned mic without a virtual device \
+                             (Vocalm installer on macOS / VB-CABLE on Windows — needs admin).",
                         )
                         .small()
                         .color(AMBER),
@@ -680,16 +693,26 @@ impl App {
                     .small()
                     .color(TEXT_FAINT),
             );
-            if self.spk_cable.is_none() {
+            if self.spk_cable.is_none() && !cfg!(target_os = "windows") {
                 ui.label(
                     RichText::new(
                         "Needs a second virtual device — included in the Vocalm installer \
-                         (macOS) or a second VB-CABLE (Windows).",
+                         (macOS).",
                     )
                     .small()
                     .color(AMBER),
                 );
             } else if self.spk_on {
+                if self.spk_cable.is_none() {
+                    ui.label(
+                        RichText::new(
+                            "Capturing system audio directly (WASAPI loopback) — no driver \
+                             or admin needed. Meeting audio lands in recordings.",
+                        )
+                        .small()
+                        .color(TEXT_DIM),
+                    );
+                }
                 if device_combo(ui, "spk_out", &mut self.spk_out, &outputs, is_real_output) {
                     self.apply_audio_state();
                 }

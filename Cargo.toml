@@ -1,6 +1,6 @@
 [package]
 name = "vocalm"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Vocalm — free on-device AI noise cancellation and meeting recorder"
 license = "MIT"
