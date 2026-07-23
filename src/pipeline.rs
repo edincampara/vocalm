@@ -184,6 +184,31 @@ pub fn start(input_name: &str, output_name: &str, shared: Arc<Shared>) -> Result
                 err_fn,
                 None,
             )?,
+            // WASAPI devices sometimes expose integer formats
+            cpal::SampleFormat::I16 => output_dev.build_output_stream(
+                &cfg,
+                move |data: &mut [i16], _| {
+                    let mut buf = vec![0.0f32; data.len()];
+                    pull_fanout(&mut clean_cons, &mut buf, out_ch, &shared);
+                    for (d, s) in data.iter_mut().zip(&buf) {
+                        *d = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                    }
+                },
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::U16 => output_dev.build_output_stream(
+                &cfg,
+                move |data: &mut [u16], _| {
+                    let mut buf = vec![0.0f32; data.len()];
+                    pull_fanout(&mut clean_cons, &mut buf, out_ch, &shared);
+                    for (d, s) in data.iter_mut().zip(&buf) {
+                        *d = ((s.clamp(-1.0, 1.0) * 32767.0) as i32 + 32768) as u16;
+                    }
+                },
+                err_fn,
+                None,
+            )?,
             other => return Err(anyhow!("unsupported output sample format {other:?}")),
         }
     };

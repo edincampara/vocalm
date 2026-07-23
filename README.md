@@ -61,6 +61,25 @@ For the virtual microphone, install the free VB-CABLE once:
 there means a kernel driver that must be Microsoft-signed, which requires an EV
 certificate — money. The app itself is fully free and works today with VB-CABLE.)
 
+### Updating (any platform)
+
+Updates ship through GitHub — from the repo folder:
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File .\update.ps1
+```
+
+```sh
+# macOS
+git pull --ff-only && scripts/build_installer.sh   # rebuilds app + installer DMG
+```
+
+Settings, recordings, and models live outside the repo, so updating never touches
+them. Every push to `main` is build-verified on Windows and macOS by GitHub Actions
+(including a DeepFilterNet3/RNNoise smoke test); tagging `v*` publishes prebuilt
+binaries as a GitHub Release.
+
 ## Building
 
 Rust 1.70+ and CMake (`brew install rustup cmake`, or rustup.rs + CMake on Windows).

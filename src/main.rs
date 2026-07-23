@@ -357,6 +357,27 @@ impl App {
     }
 }
 
+/// What the meeting app's device list shows for our cable. VB-CABLE names its
+/// playback side "CABLE Input" and capture side "CABLE Output"; BlackHole and the
+/// Vocalm drivers use one name for both sides (returned unchanged).
+fn app_facing_name(cable: &str) -> String {
+    let lc = cable.to_lowercase();
+    if let Some(pos) = lc.find("input") {
+        format!("{}Output{}", &cable[..pos], &cable[pos + 5..])
+    } else if let Some(pos) = lc.find("output") {
+        format!("{}Input{}", &cable[..pos], &cable[pos + 6..])
+    } else {
+        cable.to_string()
+    }
+}
+
+/// Identify the physical cable regardless of which side we're naming, so the
+/// mic and speaker paths never end up on the same cable (feedback of our own
+/// clean mic into the "incoming" pipeline).
+fn cable_base(name: &str) -> String {
+    name.to_lowercase().replace("input", "").replace("output", "").trim().to_string()
+}
+
 /// Virtual output the mic path renders into (apps use it as their microphone).
 /// Prefers Vocalm's own driver, falls back to BlackHole / VB-CABLE.
 fn pick_mic_cable(outputs: &[String]) -> Option<String> {
@@ -380,9 +401,10 @@ fn pick_spk_cable(inputs: &[String], mic_cable: Option<&str>) -> Option<String> 
         .or_else(|| inputs.iter().find(|n| lc(n).contains("blackhole 16ch")))
         .or_else(|| inputs.iter().find(|n| lc(n).contains("blackhole 64ch")))
         .or_else(|| {
+            let mic_base = mic_cable.map(cable_base);
             inputs
                 .iter()
-                .find(|n| is_virtual(n) && Some(n.as_str()) != mic_cable)
+                .find(|n| is_virtual(n) && Some(cable_base(n)) != mic_base)
         })
         .cloned()
 }
@@ -570,7 +592,8 @@ impl App {
                 (Some(cable), true) => {
                     ui.label(
                         RichText::new(format!(
-                            "In your meeting app, choose microphone: “{cable}”"
+                            "In your meeting app, choose microphone: “{}”",
+                            app_facing_name(cable)
                         ))
                         .small()
                         .color(TEXT_DIM),
@@ -623,9 +646,12 @@ impl App {
                 meter(ui, self.spk.level());
                 if let Some(cable) = &self.spk_cable {
                     ui.label(
-                        RichText::new(format!("In your meeting app, choose speaker: “{cable}”"))
-                            .small()
-                            .color(TEXT_DIM),
+                        RichText::new(format!(
+                            "In your meeting app, choose speaker: “{}”",
+                            app_facing_name(cable)
+                        ))
+                        .small()
+                        .color(TEXT_DIM),
                     );
                 }
                 if let Some(e) = &self.spk.error {

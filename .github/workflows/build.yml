@@ -1,0 +1,76 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: vocalm-windows
+            binary: target/release/vocalm.exe
+          - os: macos-latest
+            artifact: vocalm-macos
+            binary: target/release/vocalm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release --bin vocalm --bin denoise-wav
+
+      - name: Smoke test — denoise a generated WAV
+        shell: bash
+        run: |
+          python3 - <<'EOF'
+          import wave, struct, math, random
+          random.seed(1)
+          n = 48000 * 2
+          frames = []
+          for i in range(n):
+              speech = 6000 * math.sin(2 * math.pi * 220 * i / 48000) if (i // 12000) % 2 == 0 else 0
+              noise = random.gauss(0, 1200)
+              frames.append(max(-32767, min(32767, int(speech + noise))))
+          w = wave.open("noisy.wav", "wb")
+          w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
+          w.writeframes(struct.pack("<%dh" % n, *frames)); w.close()
+          EOF
+          ./target/release/denoise-wav noisy.wav clean.wav df
+          ./target/release/denoise-wav noisy.wav clean_rn.wav rnnoise
+          ls -la clean.wav clean_rn.wav
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Zip artifacts
+        run: |
+          cd vocalm-windows && zip -r ../vocalm-windows.zip . && cd ..
+          cd vocalm-macos && zip -r ../vocalm-macos.zip . && cd ..
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vocalm-windows.zip
+            vocalm-macos.zip
