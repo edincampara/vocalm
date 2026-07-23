@@ -116,3 +116,62 @@ pub fn send_frame(tx: &FrameTx, frame: &[f32]) {
         Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_wav(path: &Path) -> (hound::WavSpec, Vec<i16>) {
+        let mut r = hound::WavReader::open(path).unwrap();
+        let spec = r.spec();
+        let samples = r.samples::<i16>().map(|s| s.unwrap()).collect();
+        (spec, samples)
+    }
+
+    #[test]
+    fn mono_recording_writes_all_frames() {
+        let dir = std::env::temp_dir().join("vocalm-test-mono");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audio.wav");
+        let rec = Recorder::start(&path, false).unwrap();
+        for _ in 0..100 {
+            send_frame(&rec.mic_tx, &[0.5f32; HOP]);
+        }
+        let dur = rec.stop();
+        assert!((dur - 1.0).abs() < 0.02, "expected ~1s, got {dur}");
+        let (spec, samples) = read_wav(&path);
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, SAMPLE_RATE);
+        assert_eq!(samples.len(), 100 * HOP);
+        assert!(samples.iter().all(|s| (*s - 16383).abs() <= 1));
+    }
+
+    #[test]
+    fn stereo_recording_keeps_channels_separate_and_pads() {
+        let dir = std::env::temp_dir().join("vocalm-test-stereo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audio.wav");
+        let rec = Recorder::start(&path, true).unwrap();
+        let spk_tx = rec.spk_tx.clone().unwrap();
+        // mic sends 50 frames; speaker only 20 → right channel must be zero-padded
+        for i in 0..50 {
+            send_frame(&rec.mic_tx, &[0.25f32; HOP]);
+            if i < 20 {
+                send_frame(&spk_tx, &[-0.25f32; HOP]);
+            }
+        }
+        // give the writer time to drain before disconnecting
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let dur = rec.stop();
+        assert!((dur - 0.5).abs() < 0.02, "expected ~0.5s, got {dur}");
+        let (spec, samples) = read_wav(&path);
+        assert_eq!(spec.channels, 2);
+        assert_eq!(samples.len(), 50 * HOP * 2);
+        // left channel: constant mic value everywhere
+        assert!((samples[0] - 8191).abs() <= 1);
+        assert!((samples[samples.len() - 2] - 8191).abs() <= 1);
+        // right channel: speaker value early, silence after it stopped
+        assert!((samples[1] + 8192).abs() <= 1);
+        assert_eq!(samples[samples.len() - 1], 0);
+    }
+}
